@@ -79,6 +79,7 @@ For sports events, the recommended sequence is now:
 SD card/source folder
   → verified copy into a local archive
   → temporary local JPEG previews
+  → optional local uniform-group discovery and target-team choice
   → analyze and human review
   → verified copies of KEEP/REVIEW originals into a Lightroom import folder
   → Lightroom import
@@ -88,7 +89,7 @@ The archive is the source of truth. The application never deletes, overwrites, o
 moves card/archive originals. Do not format the card until you have independently
 checked the archive copy and its transfer manifest.
 
-The guided local interface saves the team setup and carries its selected paths through six stages. Start with **0 · Team setup**: choose a folder containing at least one target-uniform JPEG (five target and five other-team examples are preferred). The app blocks analysis before models load if target references are absent, preventing an all-`ERROR` results CSV.
+The guided local interface saves the team setup and carries its selected paths through seven stages. Start with **0 · Team setup**: choose a folder containing at least one target-uniform JPEG (five target and five other-team examples are preferred). Or, after creating previews, use **2a · Discover uniforms** to group recurring local colour/pattern signatures, select the group representing your team, and copy representative previews into the target-reference folder. The app blocks analysis before models load if target references are absent, preventing an all-`ERROR` results CSV.
 
 ```powershell
 streamlit run app.py

@@ -19,6 +19,11 @@ from photo_sorter.processing.ingest import (
     stage_selected_originals,
 )
 from photo_sorter.processing.pipeline import analyze_directory
+from photo_sorter.processing.uniform_discovery import (
+    UniformDiscovery,
+    discover_uniform_groups,
+    promote_reference_images,
+)
 from photo_sorter.review.storage import load_review_frame, save_review_override
 from photo_sorter.schemas.results import Decision
 
@@ -42,6 +47,7 @@ WORKFLOW_DEFAULTS = {
     "ingest_archive": "D:\\PhotoArchive\\Incoming",
     "preview_source": "D:\\PhotoArchive\\Incoming",
     "preview_output": "data/input",
+    "discovery_source": "data/input",
     "analysis_input": "data/input",
     "analysis_output": "data/output/results.csv",
     "analysis_config": "config/default.yaml",
@@ -159,6 +165,7 @@ def _render_overview() -> None:
         "0. **Team setup:** Add target-uniform reference photos and save the team context.\n"
         "1. **Ingest:** Copy the whole card to a local archive and verify every byte.\n"
         "2. **Previews:** Create smaller JPEGs used only for AI analysis.\n"
+        "2a. **Discover uniforms:** Compare recurring colour/pattern groups and choose your team.\n"
         "3. **Analyze:** Rank the previews as Keep, Review, Wrong Team, Soft, or No Subject.\n"
         "4. **Review:** Correct any decisions you disagree with.\n"
         "5. **Stage for Lightroom:** Copy `KEEP` and `REVIEW` originals into one clean import folder."
@@ -376,9 +383,98 @@ def _render_previews() -> None:
             "Preview preparation complete.",
         )
         if completed:
-            _update_workflow(analysis_input=output)
-            st.info("The preview folder has been carried forward to Analyze.")
+            _update_workflow(analysis_input=output, discovery_source=output)
+            st.info("The preview folder has been carried forward to Uniform discovery and Analyze.")
     _manifest_status(manifest)
+
+
+def _render_uniform_discovery() -> None:
+    st.subheader("2a. Discover likely uniform groups")
+    st.write(
+        "This compares recurring central colour and pattern signatures in your JPEG previews. "
+        "It does not identify a team by name; you choose the group that represents the team you care about."
+    )
+    st.caption(
+        "This is a fast local clustering pass. It does not load YOLO or CLIP, and it copies only "
+        "representative previews when you promote a group to target references."
+    )
+    source = Path(st.text_input("Preview folder to inspect", key="discovery_source"))
+    controls = st.columns(2)
+    group_count = int(
+        controls[0].number_input(
+            "Suggested groups",
+            min_value=2,
+            max_value=12,
+            value=4,
+            key="discovery_group_count",
+        )
+    )
+    max_images = int(
+        controls[1].number_input(
+            "Maximum previews to sample",
+            min_value=20,
+            max_value=2000,
+            value=400,
+            step=20,
+            key="discovery_max_images",
+        )
+    )
+    if st.button(
+        "Find uniform groups",
+        type="primary",
+        icon=":material/auto_awesome:",
+        key="run_uniform_discovery",
+    ):
+        try:
+            with st.spinner("Comparing local preview colour and pattern signatures..."):
+                st.session_state["uniform_discovery"] = discover_uniform_groups(
+                    source,
+                    group_count=group_count,
+                    max_images=max_images,
+                    samples_per_group=12,
+                )
+        except (OSError, ValueError) as exc:
+            st.error(str(exc))
+    discovery = st.session_state.get("uniform_discovery")
+    if not isinstance(discovery, UniformDiscovery):
+        st.info("Create previews, then run this step to see candidate uniform groups.")
+        return
+    st.success(
+        f"Compared {discovery.scanned_files} previews and found {len(discovery.groups)} candidate groups."
+    )
+    for group in discovery.groups:
+        with st.container(border=True):
+            red, green, blue = group.mean_rgb
+            st.markdown(
+                f"#### Group {group.index} · {len(group.files)} similar previews "
+                f"(average colour RGB {red}, {green}, {blue})"
+            )
+            images = st.columns(min(4, len(group.samples)))
+            for column, sample in zip(images, group.samples[: len(images)], strict=False):
+                column.image(str(sample), caption=sample.name, width="stretch")
+    group_options = {group.index: group for group in discovery.groups}
+    selected_index = st.selectbox(
+        "Which group is the target team?",
+        list(group_options),
+        format_func=lambda index: f"Group {index} ({len(group_options[index].files)} previews)",
+        key="discovery_selected_group",
+    )
+    target_references = _session_path("target_reference_dir", "data/references/target")
+    st.caption(f"Selected representative previews will be copied to: {target_references}")
+    if st.button(
+        "Use this group as target references",
+        type="primary",
+        icon=":material/groups:",
+        key="promote_uniform_group",
+    ):
+        try:
+            copied = promote_reference_images(group_options[selected_index].samples, target_references)
+        except (OSError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            _save_workflow_state()
+            st.success(f"Copied {len(copied)} representative previews into the target reference folder.")
+            st.rerun()
 
 
 def _render_analysis() -> None:
@@ -651,12 +747,13 @@ def _render_review() -> None:
         st.rerun()
 
 
-overview_tab, setup_tab, ingest_tab, previews_tab, analysis_tab, review_tab, stage_tab = st.tabs(
+overview_tab, setup_tab, ingest_tab, previews_tab, discovery_tab, analysis_tab, review_tab, stage_tab = st.tabs(
     [
         ":material/home: Start here",
         "0 · Team setup",
         "1 · Ingest",
         "2 · Previews",
+        "2a · Discover uniforms",
         "3 · Analyze",
         "4 · Review",
         "5 · Stage for Lightroom",
@@ -670,6 +767,8 @@ with ingest_tab:
     _render_ingest()
 with previews_tab:
     _render_previews()
+with discovery_tab:
+    _render_uniform_discovery()
 with analysis_tab:
     _render_analysis()
 with review_tab:
