@@ -199,18 +199,27 @@ def _render_ingest() -> None:
         except IngestError as exc:
             st.error(str(exc))
     confirm = st.checkbox(
-        "I understand this will copy files and never delete the source.", key="confirm_ingest"
+        "I understand this will copy files and never delete the source.",
+        key="confirm_ingest",
+        width="stretch",
     )
+    if confirm:
+        st.success("Confirmation received. You can now start the verified archive copy.")
+    else:
+        st.caption("Tick the confirmation box before starting the copy.")
     if columns[1].button(
         "Copy and verify to archive",
-        disabled=not confirm,
         key="run_ingest",
         type="primary",
         icon=":material/content_copy:",
     ):
-        _run_transfer(
-            lambda: copy_to_archive(source, archive, manifest, write=True), "Archive copy complete."
-        )
+        if not confirm:
+            st.warning("Confirm that this is a copy-only operation before starting.")
+        else:
+            _run_transfer(
+                lambda: copy_to_archive(source, archive, manifest, write=True),
+                "Archive copy complete.",
+            )
     _manifest_status(manifest)
 
 
@@ -315,20 +324,27 @@ def _render_stage() -> None:
     confirm = st.checkbox(
         "I understand this copies selected originals; it never deletes archive files.",
         key="confirm_stage",
+        width="stretch",
     )
+    if confirm:
+        st.success("Confirmation received. You can now create the Lightroom import copy.")
+    else:
+        st.caption("Tick the confirmation box before staging originals.")
     if st.button(
         "Copy selected originals for Lightroom",
-        disabled=not confirm,
         key="run_stage",
         type="primary",
         icon=":material/folder_open:",
     ):
-        _run_transfer(
-            lambda: stage_selected_originals(
-                results, archive, destination, manifest, decisions=set(choices), write=True
-            ),
-            "Original staging complete.",
-        )
+        if not confirm:
+            st.warning("Confirm that this is a copy-only operation before staging originals.")
+        else:
+            _run_transfer(
+                lambda: stage_selected_originals(
+                    results, archive, destination, manifest, decisions=set(choices), write=True
+                ),
+                "Original staging complete.",
+            )
     _manifest_status(manifest)
 
 
