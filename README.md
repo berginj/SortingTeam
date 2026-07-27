@@ -88,7 +88,7 @@ The archive is the source of truth. The application never deletes, overwrites, o
 moves card/archive originals. Do not format the card until you have independently
 checked the archive copy and its transfer manifest.
 
-The guided local interface walks through all five stages:
+The guided local interface saves the team setup and carries its selected paths through six stages. Start with **0 · Team setup**: choose a folder containing at least one target-uniform JPEG (five target and five other-team examples are preferred). The app blocks analysis before models load if target references are absent, preventing an all-`ERROR` results CSV.
 
 ```powershell
 streamlit run app.py
@@ -277,8 +277,7 @@ or burst rank; displays boxes and crops; and records:
 - focus acceptable yes/no;
 - optional note.
 
-K/R/W/S/N select decisions; arrow keys or buttons navigate. Browser security may
-block shortcuts, so visible buttons are always available.
+Use the visible decision and navigation buttons to review each image.
 
 Overrides are saved atomically to `data/output/reviewed_results.csv`. The raw
 `results.csv` is never changed.

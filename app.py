@@ -6,10 +6,9 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from PIL import Image, ImageDraw
 
-from photo_sorter.config import load_config
+from photo_sorter.config import ConfigError, load_config
 from photo_sorter.logging_config import configure_logging
 from photo_sorter.processing.ingest import (
     IngestError,
@@ -33,6 +32,66 @@ st.caption(
     "Local-only workflow: copy and verify a card/source first, analyze temporary previews, "
     "then copy selected originals for Lightroom. Nothing is deleted or moved automatically."
 )
+
+WORKFLOW_STATE_PATH = Path("data/output/workflow_state.json")
+REFERENCE_EXTENSIONS = {".jpg", ".jpeg"}
+WORKFLOW_DEFAULTS = {
+    "target_reference_dir": "data/references/target",
+    "other_reference_dir": "data/references/other",
+    "ingest_source": "D:\\DCIM",
+    "ingest_archive": "D:\\PhotoArchive\\Incoming",
+    "preview_source": "D:\\PhotoArchive\\Incoming",
+    "preview_output": "data/input",
+    "analysis_input": "data/input",
+    "analysis_output": "data/output/results.csv",
+    "analysis_config": "config/default.yaml",
+    "review_raw": "data/output/results.csv",
+    "reviewed_output": "data/output/reviewed_results.csv",
+    "stage_results": "data/output/reviewed_results.csv",
+    "stage_archive": "D:\\PhotoArchive\\Incoming",
+    "stage_destination": "D:\\PhotoArchive\\ToImport",
+}
+
+
+def _load_workflow_state() -> dict[str, str]:
+    try:
+        payload = json.loads(WORKFLOW_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {
+        key: str(value)
+        for key, value in payload.items()
+        if key in WORKFLOW_DEFAULTS and isinstance(value, str)
+    }
+
+
+def _initialize_workflow_state() -> None:
+    saved = _load_workflow_state()
+    for key, fallback in WORKFLOW_DEFAULTS.items():
+        st.session_state.setdefault(key, saved.get(key, fallback))
+
+
+def _save_workflow_state() -> None:
+    WORKFLOW_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {key: str(st.session_state.get(key, fallback)) for key, fallback in WORKFLOW_DEFAULTS.items()}
+    temporary = WORKFLOW_STATE_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(WORKFLOW_STATE_PATH)
+
+
+def _update_workflow(**values: Path | str) -> None:
+    for key, value in values.items():
+        st.session_state[key] = str(value)
+    _save_workflow_state()
+
+
+def _reference_files(path: Path, extensions: list[str] | set[str]) -> list[Path]:
+    if not path.is_dir():
+        return []
+    return discover_media(path, extensions)
+
+
+_initialize_workflow_state()
 
 
 def _session_path(key: str, fallback: str) -> Path:
@@ -66,28 +125,38 @@ def _render_overview() -> None:
     results = _session_path("analysis_output", "data/output/results.csv")
     reviewed = _session_path("reviewed_output", "data/output/reviewed_results.csv")
     import_folder = _session_path("stage_destination", "D:\\PhotoArchive\\ToImport")
-    cards = st.columns(4)
+    target_references = _session_path("target_reference_dir", "data/references/target")
+    cards = st.columns(5)
     with cards[0].container(border=True):
+        st.markdown(":material/groups: **0. Set the target team**")
+        _path_badge(
+            target_references,
+            "Reference folder selected",
+            "Target references required",
+        )
+        st.caption(str(target_references))
+    with cards[1].container(border=True):
         st.markdown(":material/inventory_2: **1. Archive every original**")
         _path_badge(archive, "Archive available", "Archive not created")
         st.caption(str(archive))
-    with cards[1].container(border=True):
+    with cards[2].container(border=True):
         st.markdown(":material/photo_library: **2. Analyze previews**")
         _path_badge(previews, "Preview folder available", "Previews not created")
         st.caption("Temporary JPEGs; safe to regenerate.")
-    with cards[2].container(border=True):
+    with cards[3].container(border=True):
         st.markdown(":material/rule: **3. Confirm choices**")
         _path_badge(
             reviewed if reviewed.is_file() else results, "Results available", "Analysis not run"
         )
         st.caption("Review adjusts the AI recommendations.")
-    with cards[3].container(border=True):
+    with cards[4].container(border=True):
         st.markdown(":material/folder_open: **4. Import selected originals**")
         _path_badge(import_folder, "Import folder available", "Nothing staged yet")
         st.caption(str(import_folder))
 
     st.subheader("The workflow")
     st.markdown(
+        "0. **Team setup:** Add target-uniform reference photos and save the team context.\n"
         "1. **Ingest:** Copy the whole card to a local archive and verify every byte.\n"
         "2. **Previews:** Create smaller JPEGs used only for AI analysis.\n"
         "3. **Analyze:** Rank the previews as Keep, Review, Wrong Team, Soft, or No Subject.\n"
@@ -95,10 +164,54 @@ def _render_overview() -> None:
         "5. **Stage for Lightroom:** Copy `KEEP` and `REVIEW` originals into one clean import folder."
     )
     st.success(
-        "Start with **1 · Ingest**. Do not format the card until the ingest manifest shows "
+        "Start with **0 · Team setup**, then **1 · Ingest**. Do not format the card until the ingest manifest shows "
         "each file as `COPIED` or `VERIFIED_EXISTING`.",
         icon=":material/check_circle:",
     )
+
+
+def _render_team_setup() -> None:
+    st.subheader("0. Set the target team before analysis")
+    st.write(
+        "Add clear, close photos of the uniform you want to keep. This context is saved locally "
+        "and carried into analysis, review, and staging."
+    )
+    st.caption(
+        "Use JPEGs with the target player prominent. One target image enables analysis; 5 target "
+        "and 5 other-team images improve the classifier; 15 per group is recommended."
+    )
+    with st.form("team_setup", border=True):
+        target = Path(st.text_input("Target-uniform reference folder", key="target_reference_dir"))
+        other = Path(
+            st.text_input(
+                "Optional other-team reference folder",
+                key="other_reference_dir",
+            )
+        )
+        saved = st.form_submit_button(
+            "Save team setup",
+            type="primary",
+            icon=":material/save:",
+        )
+    target_files = _reference_files(target, REFERENCE_EXTENSIONS)
+    other_files = _reference_files(other, REFERENCE_EXTENSIONS)
+    metrics = st.columns(2)
+    metrics[0].metric("Target reference photos", len(target_files))
+    metrics[1].metric("Other-team reference photos", len(other_files))
+    if not target_files:
+        st.error(
+            "Analysis is blocked until this folder contains at least one .jpg or .jpeg target-uniform reference photo.",
+            icon=":material/block:",
+        )
+    elif len(target_files) < 5:
+        st.warning("Target-only matching will run, but add at least 5 other-team references for stronger separation.")
+    elif len(other_files) < 5:
+        st.warning("Add at least 5 other-team references to enable the stronger two-class classifier.")
+    else:
+        st.success("Team context is ready for analysis.", icon=":material/check_circle:")
+    if saved:
+        _save_workflow_state()
+        st.success(f"Saved local workflow context to {WORKFLOW_STATE_PATH}.")
 
 
 def _optional_bool(label: str, key: str) -> bool | None:
@@ -159,19 +272,20 @@ def _manifest_status(path: Path) -> None:
         )
 
 
-def _run_transfer(action: Any, success: str) -> None:
+def _run_transfer(action: Any, success: str) -> bool:
     try:
         with st.spinner("Working locally; this may take a while for a card-sized batch..."):
             manifest = action()
     except (IngestError, OSError, ValueError) as exc:
         st.error(str(exc))
-        return
+        return False
     summary = manifest.summary()
     if summary.get("ERROR", 0):
         st.warning(f"{success} finished with errors. See the manifest for every file.")
     else:
         st.success(success)
     st.json(summary)
+    return not bool(summary.get("ERROR", 0))
 
 
 def _render_ingest() -> None:
@@ -216,10 +330,16 @@ def _render_ingest() -> None:
         if not confirm:
             st.warning("Confirm that this is a copy-only operation before starting.")
         else:
-            _run_transfer(
+            completed = _run_transfer(
                 lambda: copy_to_archive(source, archive, manifest, write=True),
                 "Archive copy complete.",
             )
+            if completed:
+                _update_workflow(
+                    preview_source=archive,
+                    stage_archive=archive,
+                )
+                st.info("The archive folder has been carried forward to Previews and Staging.")
     _manifest_status(manifest)
 
 
@@ -251,10 +371,13 @@ def _render_previews() -> None:
         type="primary",
         icon=":material/photo_library:",
     ):
-        _run_transfer(
+        completed = _run_transfer(
             lambda: prepare_previews(source, output, manifest, max_edge=int(max_edge), write=True),
             "Preview preparation complete.",
         )
+        if completed:
+            _update_workflow(analysis_input=output)
+            st.info("The preview folder has been carried forward to Analyze.")
     _manifest_status(manifest)
 
 
@@ -266,6 +389,19 @@ def _render_analysis() -> None:
         st.text_input("Analysis results CSV", "data/output/results.csv", key="analysis_output")
     )
     config_path = Path(st.text_input("Configuration", "config/default.yaml", key="analysis_config"))
+    target_references = _session_path("target_reference_dir", "data/references/target")
+    other_references = _session_path("other_reference_dir", "data/references/other")
+    st.text(f"Target references: {target_references}")
+    st.text(f"Other-team references: {other_references}")
+    target_count = len(_reference_files(target_references, REFERENCE_EXTENSIONS))
+    other_count = len(_reference_files(other_references, REFERENCE_EXTENSIONS))
+    st.caption(f"Team setup: {target_count} target references · {other_count} other-team references")
+    if not target_count:
+        st.error(
+            "Blocked: add at least one target reference image in 0 · Team setup before running analysis. "
+            "No model will be loaded until this is resolved.",
+            icon=":material/block:",
+        )
     overwrite = st.checkbox("Replace an existing results CSV", key="analysis_overwrite")
     if st.button(
         "Run local analysis",
@@ -274,15 +410,28 @@ def _render_analysis() -> None:
         icon=":material/play_arrow:",
     ):
         try:
+            if not target_count:
+                return
+            config = load_config(config_path)
+            config.runtime.target_references = target_references.expanduser().resolve()
+            config.runtime.other_references = other_references.expanduser().resolve()
+            target_count = len(_reference_files(config.runtime.target_references, config.runtime.allowed_extensions))
+            if not target_count:
+                st.error(
+                    "Blocked: the configured target reference folder contains no supported reference images.",
+                    icon=":material/block:",
+                )
+                return
             with st.spinner("Loading local models and analyzing previews..."):
-                config = load_config(config_path)
                 logger = configure_logging(config.logging)
                 summary = analyze_directory(source, output, config, logger, overwrite=overwrite)
             st.success(
                 f"Analysis complete: {len(summary.results)} photos, {sum(bool(row.error) for row in summary.results)} errors."
             )
             st.caption(f"Results: {summary.output_path.resolve()}")
-        except (OSError, RuntimeError, ValueError) as exc:
+            _update_workflow(review_raw=output, stage_results=output)
+            st.info("The results file has been carried forward to Review and Staging.")
+        except (ConfigError, OSError, RuntimeError, ValueError) as exc:
             st.error(str(exc))
 
 
@@ -365,6 +514,16 @@ def _render_review() -> None:
     except (OSError, ValueError) as exc:
         st.info(f"Run analysis first, then review here. {exc}")
         return
+    if not frame.empty and frame["decision"].eq("ERROR").all():
+        errors = frame.get("error", pd.Series(dtype="string")).dropna().astype(str).unique().tolist()
+        st.error(
+            "This results file contains only processing errors, not reviewable recommendations. "
+            "Return to 0 · Team setup, add target references, then rerun analysis with “Replace an existing results CSV” selected.",
+            icon=":material/error:",
+        )
+        if errors:
+            st.code("\n".join(errors[:3]), language=None)
+        return
     decisions = sorted(frame["decision"].dropna().astype(str).unique())
     decision_filter = st.multiselect("Decision", decisions, default=decisions, key="review_filter")
     sort_column = st.selectbox(
@@ -442,7 +601,12 @@ def _render_review() -> None:
         "error",
     ]
     st.dataframe(
-        pd.DataFrame([{"field": column, "value": row.get(column, "")} for column in score_columns]),
+        pd.DataFrame(
+            [
+                {"field": column, "value": "" if pd.isna(row.get(column)) else str(row.get(column))}
+                for column in score_columns
+            ]
+        ),
         hide_index=True,
     )
     person_options: list[int | None] = [None] + [int(person["index"]) for person in people]
@@ -470,10 +634,6 @@ def _render_review() -> None:
     ):
         if column.button(label, width="stretch", key=f"decision_{value}"):
             chosen = value
-    components.html(
-        """<script>const map={k:'K · Keep',r:'R · Review',w:'W · Wrong Team',s:'S · Soft',n:'N · No Subject',ArrowLeft:'← Previous',ArrowRight:'Next →'};window.parent.document.onkeydown=(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;const wanted=map[event.key]||map[event.key.toLowerCase()];const button=wanted&&[...window.parent.document.querySelectorAll('button')].find((el)=>el.innerText.includes(wanted));if(button){event.preventDefault();button.click();}};</script>""",
-        height=0,
-    )
     if chosen:
         save_review_override(
             frame,
@@ -491,9 +651,10 @@ def _render_review() -> None:
         st.rerun()
 
 
-overview_tab, ingest_tab, previews_tab, analysis_tab, review_tab, stage_tab = st.tabs(
+overview_tab, setup_tab, ingest_tab, previews_tab, analysis_tab, review_tab, stage_tab = st.tabs(
     [
         ":material/home: Start here",
+        "0 · Team setup",
         "1 · Ingest",
         "2 · Previews",
         "3 · Analyze",
@@ -503,6 +664,8 @@ overview_tab, ingest_tab, previews_tab, analysis_tab, review_tab, stage_tab = st
 )
 with overview_tab:
     _render_overview()
+with setup_tab:
+    _render_team_setup()
 with ingest_tab:
     _render_ingest()
 with previews_tab:
