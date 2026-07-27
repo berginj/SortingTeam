@@ -1,0 +1,76 @@
+# Copy this file and edit the team-specific reference paths and HSV ranges.
+runtime:
+  device: auto
+  workers: 0
+  chunk_size: 16
+  offline: true
+  seed: 42
+  cache_dir: ../.cache/photo_sorter
+  target_references: ../data/references/target
+  other_references: ../data/references/other
+  allowed_extensions: [.jpg, .jpeg]
+  recursive: true
+person_detection:
+  backend: ultralytics
+  model_path: ../.cache/photo_sorter/models/yolo11n.pt
+  confidence_threshold: 0.25
+  iou_threshold: 0.45
+  inference_size: 960
+  max_detections: 100
+  crop_padding: 0.08
+  upper_body_ratio: 0.625
+  min_crop_size: 64
+clip:
+  model_name: ViT-B-32
+  pretrained: laion2b_s34b_b79k
+  checkpoint_path: ../.cache/photo_sorter/models/open_clip_ViT-B-32_laion2b_s34b_b79k.safetensors
+  batch_size: 32
+  precision: auto
+uniform_classifier:
+  mode: auto
+  min_examples_per_class: 5
+  warning_examples_per_class: 15
+  logistic_c: 1.0
+  centroid_temperature: 0.07
+  target_only_midpoint: 0.25
+  minimum_target_score: 0.35
+  ambiguous_reference_margin: 0.15
+  selection_weights: {uniform: 0.70, color: 0.20, detection: 0.05, crop_quality: 0.05, centrality: 0.0}
+uniform_colors:
+  - {name: teal, hsv_lower: [78, 70, 45], hsv_upper: [100, 255, 230], weight: 0.75}
+  - {name: white, hsv_lower: [0, 0, 180], hsv_upper: [179, 70, 255], weight: 0.25}
+focus:
+  analysis_long_edge: 512
+  minimum_crop_dimension: 64
+  laplacian_weight: 0.5
+  tenengrad_weight: 0.5
+  center_weight: 0.30
+  noise_correction: true
+  noise_penalty: 0.35
+  denoise: {enabled: true, iso_threshold: 3200, diameter: 5, sigma_color: 25.0, sigma_space: 25.0}
+burst_grouping: {enabled: true, max_gap_seconds: 2.0, uniform_weight: 0.65, focus_weight: 0.35}
+decision_thresholds:
+  keep_uniform_probability: 0.85
+  review_uniform_probability: 0.45
+  wrong_team_probability: 0.25
+  keep_focus_percentile: 35
+  soft_focus_percentile: 15
+metadata_mapping:
+  keywords: {enabled: true}
+  ratings: {enabled: false}
+  color_labels: {enabled: false}
+  decisions:
+    KEEP: {keyword: ML_KEEP, rating: 5, color_label: Green}
+    REVIEW: {keyword: ML_REVIEW, rating: 3, color_label: Yellow}
+    WRONG_TEAM: {keyword: ML_WRONG_TEAM, rating: null, color_label: null}
+    SOFT: {keyword: ML_SOFT, rating: null, color_label: null}
+    NO_SUBJECT: {keyword: ML_NO_SUBJECT, rating: null, color_label: null}
+    ERROR: {keyword: null, rating: null, color_label: null}
+  raw_extensions: [.arw, .cr2, .cr3, .dng, .nef, .orf, .raf, .rw2]
+output:
+  audit_dir: ../data/output/audit
+  xmp_staging_dir: ../data/output/xmp
+  xmp_backup_dir: ../data/output/xmp_backups
+  csv_float_precision: 6
+  write_audit_json: true
+logging: {level: INFO, file_enabled: true, file: ../data/output/photo_sorter.jsonl}
