@@ -23,12 +23,82 @@ from photo_sorter.processing.pipeline import analyze_directory
 from photo_sorter.review.storage import load_review_frame, save_review_override
 from photo_sorter.schemas.results import Decision
 
-st.set_page_config(page_title="Sports Photo Sorter", layout="wide")
+st.set_page_config(
+    page_title="Sports Photo Sorter",
+    page_icon=":material/filter_alt:",
+    layout="wide",
+)
 st.title("Sports Photo Sorter — Local Ingest, Cull, and Review")
 st.caption(
     "Local-only workflow: copy and verify a card/source first, analyze temporary previews, "
     "then copy selected originals for Lightroom. Nothing is deleted or moved automatically."
 )
+
+
+def _session_path(key: str, fallback: str) -> Path:
+    return Path(str(st.session_state.get(key, fallback)))
+
+
+def _path_badge(path: Path, present_label: str, missing_label: str) -> None:
+    if path.exists():
+        st.badge(present_label, icon=":material/check_circle:", color="green")
+    else:
+        st.badge(missing_label, icon=":material/pending:", color="orange")
+
+
+def _render_overview() -> None:
+    st.header("Start here")
+    with st.container(border=True):
+        st.subheader("What you get at the end")
+        st.markdown(
+            "A **Lightroom import folder** containing verified copies of only the photos "
+            "you choose to keep or review. Your full archive remains untouched."
+        )
+        st.info(
+            "This app is a culling assistant, not Lightroom itself. It first makes a safe "
+            "archive copy, then creates disposable previews for analysis, then stages your "
+            "best original files for import.",
+            icon=":material/info:",
+        )
+
+    archive = _session_path("ingest_archive", "D:\\PhotoArchive\\Incoming")
+    previews = _session_path("preview_output", "data/input")
+    results = _session_path("analysis_output", "data/output/results.csv")
+    reviewed = _session_path("reviewed_output", "data/output/reviewed_results.csv")
+    import_folder = _session_path("stage_destination", "D:\\PhotoArchive\\ToImport")
+    cards = st.columns(4)
+    with cards[0].container(border=True):
+        st.markdown(":material/inventory_2: **1. Archive every original**")
+        _path_badge(archive, "Archive available", "Archive not created")
+        st.caption(str(archive))
+    with cards[1].container(border=True):
+        st.markdown(":material/photo_library: **2. Analyze previews**")
+        _path_badge(previews, "Preview folder available", "Previews not created")
+        st.caption("Temporary JPEGs; safe to regenerate.")
+    with cards[2].container(border=True):
+        st.markdown(":material/rule: **3. Confirm choices**")
+        _path_badge(
+            reviewed if reviewed.is_file() else results, "Results available", "Analysis not run"
+        )
+        st.caption("Review adjusts the AI recommendations.")
+    with cards[3].container(border=True):
+        st.markdown(":material/folder_open: **4. Import selected originals**")
+        _path_badge(import_folder, "Import folder available", "Nothing staged yet")
+        st.caption(str(import_folder))
+
+    st.subheader("The workflow")
+    st.markdown(
+        "1. **Ingest:** Copy the whole card to a local archive and verify every byte.\n"
+        "2. **Previews:** Create smaller JPEGs used only for AI analysis.\n"
+        "3. **Analyze:** Rank the previews as Keep, Review, Wrong Team, Soft, or No Subject.\n"
+        "4. **Review:** Correct any decisions you disagree with.\n"
+        "5. **Stage for Lightroom:** Copy `KEEP` and `REVIEW` originals into one clean import folder."
+    )
+    st.success(
+        "Start with **1 · Ingest**. Do not format the card until the ingest manifest shows "
+        "each file as `COPIED` or `VERIFIED_EXISTING`.",
+        icon=":material/check_circle:",
+    )
 
 
 def _optional_bool(label: str, key: str) -> bool | None:
@@ -86,7 +156,6 @@ def _manifest_status(path: Path) -> None:
                 ]
             ),
             hide_index=True,
-            use_container_width=True,
         )
 
 
@@ -108,6 +177,7 @@ def _run_transfer(action: Any, success: str) -> None:
 def _render_ingest() -> None:
     st.subheader("1. Copy card/source to a local archive")
     st.write("This is a verified copy, not a move. Keep the card untouched until you verify it.")
+    st.caption("Outcome: a complete local archive plus an ingest manifest proving what copied.")
     source = Path(st.text_input("Card or source folder", "D:\\DCIM", key="ingest_source"))
     archive = Path(
         st.text_input("Local archive folder", "D:\\PhotoArchive\\Incoming", key="ingest_archive")
@@ -131,7 +201,13 @@ def _render_ingest() -> None:
     confirm = st.checkbox(
         "I understand this will copy files and never delete the source.", key="confirm_ingest"
     )
-    if columns[1].button("Copy and verify to archive", disabled=not confirm, key="run_ingest"):
+    if columns[1].button(
+        "Copy and verify to archive",
+        disabled=not confirm,
+        key="run_ingest",
+        type="primary",
+        icon=":material/content_copy:",
+    ):
         _run_transfer(
             lambda: copy_to_archive(source, archive, manifest, write=True), "Archive copy complete."
         )
@@ -142,6 +218,9 @@ def _render_previews() -> None:
     st.subheader("2. Prepare temporary local analysis previews")
     st.write(
         "JPEGs are resized locally. RAW files use embedded previews through ExifTool when available."
+    )
+    st.caption(
+        "Outcome: small, disposable JPEGs for analysis. Your archive originals are not changed."
     )
     source = Path(
         st.text_input("Archive source folder", "D:\\PhotoArchive\\Incoming", key="preview_source")
@@ -157,7 +236,12 @@ def _render_previews() -> None:
             key="preview_manifest",
         )
     )
-    if st.button("Create local JPEG previews", key="run_previews"):
+    if st.button(
+        "Create local JPEG previews",
+        key="run_previews",
+        type="primary",
+        icon=":material/photo_library:",
+    ):
         _run_transfer(
             lambda: prepare_previews(source, output, manifest, max_edge=int(max_edge), write=True),
             "Preview preparation complete.",
@@ -167,13 +251,19 @@ def _render_previews() -> None:
 
 def _render_analysis() -> None:
     st.subheader("3. Analyze previews")
+    st.caption("Outcome: results.csv ranks every preview and identifies the likely target player.")
     source = Path(st.text_input("Preview folder", "data/input", key="analysis_input"))
     output = Path(
         st.text_input("Analysis results CSV", "data/output/results.csv", key="analysis_output")
     )
     config_path = Path(st.text_input("Configuration", "config/default.yaml", key="analysis_config"))
     overwrite = st.checkbox("Replace an existing results CSV", key="analysis_overwrite")
-    if st.button("Run local analysis", key="run_analysis"):
+    if st.button(
+        "Run local analysis",
+        key="run_analysis",
+        type="primary",
+        icon=":material/play_arrow:",
+    ):
         try:
             with st.spinner("Loading local models and analyzing previews..."):
                 config = load_config(config_path)
@@ -190,6 +280,10 @@ def _render_analysis() -> None:
 def _render_stage() -> None:
     st.subheader("5. Copy selected originals into a Lightroom import folder")
     st.write("This creates verified copies. Your archive originals stay in place.")
+    st.caption(
+        "Outcome: this folder is the one you import into Lightroom. By default it contains "
+        "both KEEP and REVIEW originals."
+    )
     results = Path(
         st.text_input(
             "Results or reviewed-results CSV",
@@ -222,7 +316,13 @@ def _render_stage() -> None:
         "I understand this copies selected originals; it never deletes archive files.",
         key="confirm_stage",
     )
-    if st.button("Copy selected originals for Lightroom", disabled=not confirm, key="run_stage"):
+    if st.button(
+        "Copy selected originals for Lightroom",
+        disabled=not confirm,
+        key="run_stage",
+        type="primary",
+        icon=":material/folder_open:",
+    ):
         _run_transfer(
             lambda: stage_selected_originals(
                 results, archive, destination, manifest, decisions=set(choices), write=True
@@ -234,6 +334,10 @@ def _render_stage() -> None:
 
 def _render_review() -> None:
     st.subheader("4. Review analysis results")
+    st.caption(
+        "Outcome: reviewed_results.csv replaces only the recommendations you change; "
+        "the original results.csv remains unchanged."
+    )
     raw_path = Path(st.text_input("Raw results CSV", "data/output/results.csv", key="review_raw"))
     reviewed_path = Path(
         st.text_input(
@@ -295,7 +399,7 @@ def _render_review() -> None:
         selected_index = None
     st.markdown(f"### {row['filename']} · {row['decision']}")
     left, center, right = st.columns([2, 1, 1])
-    left.image(_annotated(image, people, selected_index), use_container_width=True)
+    left.image(_annotated(image, people, selected_index), width="stretch")
     selected_person = next(
         (person for person in people if int(person["index"]) == selected_index), None
     )
@@ -303,12 +407,12 @@ def _render_review() -> None:
         center.image(
             image.crop(tuple(selected_person["padded_bbox"])),
             caption="Selected person",
-            use_container_width=True,
+            width="stretch",
         )
         right.image(
             image.crop(tuple(selected_person["upper_body_bbox"])),
             caption="Uniform crop",
-            use_container_width=True,
+            width="stretch",
         )
     score_columns = [
         "people_detected",
@@ -324,7 +428,6 @@ def _render_review() -> None:
     st.dataframe(
         pd.DataFrame([{"field": column, "value": row.get(column, "")} for column in score_columns]),
         hide_index=True,
-        use_container_width=True,
     )
     person_options: list[int | None] = [None] + [int(person["index"]) for person in people]
     correct_person = st.selectbox(
@@ -349,7 +452,7 @@ def _render_review() -> None:
         ],
         strict=True,
     ):
-        if column.button(label, use_container_width=True, key=f"decision_{value}"):
+        if column.button(label, width="stretch", key=f"decision_{value}"):
             chosen = value
     components.html(
         """<script>const map={k:'K · Keep',r:'R · Review',w:'W · Wrong Team',s:'S · Soft',n:'N · No Subject',ArrowLeft:'← Previous',ArrowRight:'Next →'};window.parent.document.onkeydown=(event)=>{if(['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;const wanted=map[event.key]||map[event.key.toLowerCase()];const button=wanted&&[...window.parent.document.querySelectorAll('button')].find((el)=>el.innerText.includes(wanted));if(button){event.preventDefault();button.click();}};</script>""",
@@ -372,9 +475,18 @@ def _render_review() -> None:
         st.rerun()
 
 
-ingest_tab, previews_tab, analysis_tab, review_tab, stage_tab = st.tabs(
-    ["1 · Ingest", "2 · Previews", "3 · Analyze", "4 · Review", "5 · Stage for Lightroom"]
+overview_tab, ingest_tab, previews_tab, analysis_tab, review_tab, stage_tab = st.tabs(
+    [
+        ":material/home: Start here",
+        "1 · Ingest",
+        "2 · Previews",
+        "3 · Analyze",
+        "4 · Review",
+        "5 · Stage for Lightroom",
+    ]
 )
+with overview_tab:
+    _render_overview()
 with ingest_tab:
     _render_ingest()
 with previews_tab:
