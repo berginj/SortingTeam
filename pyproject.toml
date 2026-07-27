@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photo-sorter"
+version = "0.1.0"
+description = "Fully local sports-photo uniform and focus sorting for Lightroom workflows"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { file = "LICENSE" }
+authors = [{ name = "SortingTeam contributors" }]
+dependencies = [
+  "torch>=2.6,<2.14",
+  "torchvision>=0.21,<0.29",
+  "ultralytics>=8.3,<8.5",
+  "open_clip_torch>=3.0,<3.4",
+  "opencv-python>=4.10,<5",
+  "Pillow>=10.4,<13",
+  "numpy>=1.26,<2.5",
+  "pandas>=2.2,<3",
+  "scikit-learn>=1.5,<2",
+  "joblib>=1.4,<2",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+  "PyYAML>=6,<7",
+  "typer>=0.12,<1",
+  "rich>=13.8,<15",
+  "tqdm>=4.66,<5",
+  "streamlit>=1.40,<1.60",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+  "mypy>=1.14,<2",
+  "pandas-stubs>=2.2",
+  "types-PyYAML>=6.0.12",
+]
+
+[project.scripts]
+photo-sorter = "photo_sorter.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".venv", ".cache", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+exclude = ["tests/"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+  "cv2.*",
+  "joblib.*",
+  "open_clip.*",
+  "sklearn.*",
+  "streamlit.*",
+  "torch.*",
+  "ultralytics.*",
+]
+ignore_missing_imports = true
+
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "model: requires downloaded YOLO and OpenCLIP weights",
+]
+
+[tool.coverage.run]
+source = ["photo_sorter"]
+omit = [
+  "src/photo_sorter/__main__.py",
+  "src/photo_sorter/cli.py",
+  "src/photo_sorter/logging_config.py",
+  "src/photo_sorter/metadata/exif_reader.py",
+  "src/photo_sorter/models/person_detector.py",
+  "src/photo_sorter/models/clip_embedder.py",
+  "src/photo_sorter/processing/inspect_image.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
