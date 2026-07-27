@@ -15,6 +15,12 @@ from photo_sorter.calibration import CalibrationError, calibrate
 from photo_sorter.config import ConfigError, dump_config, load_config
 from photo_sorter.logging_config import configure_logging
 from photo_sorter.metadata.xmp_writer import XmpError, apply_xmp
+from photo_sorter.processing.ingest import (
+    IngestError,
+    copy_to_archive,
+    prepare_previews,
+    stage_selected_originals,
+)
 from photo_sorter.processing.inspect_image import inspect_image as inspect_one_image
 from photo_sorter.processing.pipeline import (
     analyze_directory,
@@ -184,6 +190,89 @@ def inspect_image(
         _fatal(str(exc))
     console.print(f"Decision: [bold]{result.decision.value}[/bold] — {result.reason}")
     console.print(f"Debug artifacts: [cyan]{debug_output.resolve()}[/cyan]")
+
+
+def _print_transfer_summary(label: str, manifest_path: Path, summary: dict[str, int]) -> None:
+    console.print(Panel.fit(json.dumps(summary, indent=2), title=label))
+    console.print(f"Transfer manifest: [cyan]{manifest_path.resolve()}[/cyan]")
+
+
+@app.command("ingest")
+def ingest(
+    source: Annotated[Path, typer.Option("--source", help="Card or source folder.")],
+    destination: Annotated[Path, typer.Option("--destination", help="Local archive folder.")],
+    manifest: Annotated[
+        Path | None, typer.Option("--manifest", help="JSON transfer manifest path.")
+    ] = None,
+    write: Annotated[bool, typer.Option("--write", help="Copy and SHA-256 verify files.")] = False,
+) -> None:
+    """Plan or perform a verified, non-destructive card/source-to-archive copy."""
+    output = manifest or destination / ".photo_sorter" / "ingest_manifest.json"
+    try:
+        result = copy_to_archive(source, destination, output, write=write)
+    except (IngestError, OSError, ValueError) as exc:
+        _fatal(str(exc))
+    _print_transfer_summary("Ingest copy" if write else "Ingest dry run", output, result.summary())
+    if result.summary().get("ERROR"):
+        raise typer.Exit(code=1)
+
+
+@app.command("prepare-previews")
+def prepare_previews_command(
+    source: Annotated[Path, typer.Option("--source", help="Local archive folder.")],
+    destination: Annotated[
+        Path, typer.Option("--destination", help="Temporary JPEG preview folder.")
+    ],
+    manifest: Annotated[
+        Path | None, typer.Option("--manifest", help="JSON preview manifest path.")
+    ] = None,
+    max_edge: Annotated[int, typer.Option("--max-edge", min=256, max=10000)] = 2560,
+    write: Annotated[bool, typer.Option("--write", help="Create JPEG previews locally.")] = False,
+) -> None:
+    """Create temporary analysis JPEGs from local images or embedded RAW previews."""
+    output = manifest or destination / ".photo_sorter" / "preview_manifest.json"
+    try:
+        result = prepare_previews(source, destination, output, max_edge=max_edge, write=write)
+    except (IngestError, OSError, ValueError) as exc:
+        _fatal(str(exc))
+    _print_transfer_summary(
+        "Preview preparation" if write else "Preview dry run", output, result.summary()
+    )
+    if result.summary().get("ERROR"):
+        raise typer.Exit(code=1)
+
+
+@app.command("stage-originals")
+def stage_originals(
+    results: Annotated[Path, typer.Option("--results", "-r")],
+    originals_dir: Annotated[
+        Path, typer.Option("--originals-dir", help="Local immutable archive.")
+    ],
+    destination: Annotated[Path, typer.Option("--destination", help="Lightroom import folder.")],
+    decisions: Annotated[
+        str, typer.Option("--decisions", help="Comma-separated effective decisions to copy.")
+    ] = "KEEP,REVIEW",
+    manifest: Annotated[Path | None, typer.Option("--manifest")] = None,
+    write: Annotated[
+        bool, typer.Option("--write", help="Copy and SHA-256 verify selected originals.")
+    ] = False,
+) -> None:
+    """Stage selected originals by copying them; archive originals are never moved."""
+    output = manifest or destination / ".photo_sorter" / "stage_manifest.json"
+    requested = {item.strip().upper() for item in decisions.split(",") if item.strip()}
+    if not requested:
+        _fatal("--decisions must include at least one decision.", code=2)
+    try:
+        result = stage_selected_originals(
+            results, originals_dir, destination, output, decisions=requested, write=write
+        )
+    except (IngestError, OSError, ValueError) as exc:
+        _fatal(str(exc))
+    _print_transfer_summary(
+        "Original staging" if write else "Original staging dry run", output, result.summary()
+    )
+    if result.summary().get("ERROR"):
+        raise typer.Exit(code=1)
 
 
 @app.command("apply-xmp")
