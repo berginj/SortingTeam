@@ -71,7 +71,77 @@ available; otherwise processing uses the CPU. `requirements-lock.txt` captures t
 validated Windows/Python 3.13 environment; the macOS/Linux script resolves the
 bounded cross-platform ranges in `pyproject.toml`.
 
-## Lightroom preview export
+## Recommended ingest-first workflow
+
+For sports events, the recommended sequence is now:
+
+```text
+SD card/source folder
+  → verified copy into a local archive
+  → temporary local JPEG previews
+  → analyze and human review
+  → verified copies of KEEP/REVIEW originals into a Lightroom import folder
+  → Lightroom import
+```
+
+The archive is the source of truth. The application never deletes, overwrites, or
+moves card/archive originals. Do not format the card until you have independently
+checked the archive copy and its transfer manifest.
+
+The guided local interface walks through all five stages:
+
+```powershell
+streamlit run app.py
+```
+
+Each copy operation writes an atomic JSON manifest with source/destination paths,
+per-file status, SHA-256 hashes, timestamps, and errors. Restarting an ingest is
+safe: an existing destination with the same hash is recorded as
+`VERIFIED_EXISTING`; a different file is an error and is never overwritten.
+
+### Command-line ingest alternative
+
+Preview the copy first, then explicitly write it:
+
+```powershell
+python -m photo_sorter ingest `
+  --source E:\DCIM `
+  --destination D:\PhotoArchive\Incoming `
+  --write
+```
+
+Create temporary previews from the local archive:
+
+```powershell
+python -m photo_sorter prepare-previews `
+  --source D:\PhotoArchive\Incoming `
+  --destination data\input `
+  --max-edge 2560 `
+  --write
+```
+
+JPEG/TIFF/PNG sources are rendered locally with Pillow. For RAW sources, the command
+extracts a locally embedded JPEG preview using ExifTool; if ExifTool is unavailable
+or the camera format has no usable embedded preview, it records an error and leaves
+the RAW untouched. You can instead export temporary Lightroom JPEG previews as
+described below.
+
+After analysis and review, stage copies for Lightroom import:
+
+```powershell
+python -m photo_sorter stage-originals `
+  --results data\output\reviewed_results.csv `
+  --originals-dir D:\PhotoArchive\Incoming `
+  --destination D:\PhotoArchive\ToImport `
+  --decisions KEEP,REVIEW `
+  --write
+```
+
+This preserves relative folders, verifies every staged copy, and writes a staging
+manifest. It copies rather than moves originals. Import `D:\PhotoArchive\ToImport`
+into Lightroom when you are satisfied with the reviewed selection.
+
+## Lightroom preview export (alternative)
 
 In Lightroom Classic, select the photos and export temporary previews using:
 
@@ -212,6 +282,27 @@ block shortcuts, so visible buttons are always available.
 
 Overrides are saved atomically to `data/output/reviewed_results.csv`. The raw
 `results.csv` is never changed.
+
+## Test and verify the workflow
+
+Run the full automated suite after installation or an upgrade:
+
+```powershell
+python -m pytest
+python -m ruff format --check .
+python -m ruff check .
+python -m mypy src
+python scripts\verify_install.py
+```
+
+For a safe manual smoke test, use a small copied folder rather than a live card:
+
+1. Run `ingest` without `--write` and inspect its manifest.
+2. Run it again with `--write`; confirm every record is `COPIED` or
+   `VERIFIED_EXISTING`.
+3. Create previews, run analysis, and inspect a few decisions in the review UI.
+4. Run `stage-originals` without `--write`, inspect the staging manifest, then run
+   it with `--write` against a disposable Lightroom-import test folder.
 
 ## Write XMP metadata safely
 
